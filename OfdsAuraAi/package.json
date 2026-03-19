@@ -1,0 +1,23 @@
+{
+  "name": "auraodds",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"node api/index.js\" \"vite\"",
+    "build": "vite build",
+    "start": "node api/index.js",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.99.2",
+    "concurrently": "^9.2.1",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.11",
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.2.4"
+  }
+}

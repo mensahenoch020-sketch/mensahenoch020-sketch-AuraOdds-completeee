@@ -1,0 +1,435 @@
+Fix these specific issues in the existing AuraOdds website. 
+Do not rebuild. Fix each issue exactly as described below.
+
+━━━━━━━━━━━━━━━━━━━━
+FIX 1: SORT BUTTONS
+━━━━━━━━━━━━━━━━━━━━
+The three sort buttons "Sort by Edge", "Sort by Confidence", "Sort by Odds" 
+are not working. Here is exactly how to fix them:
+
+- Store predictions in a React state array called predictionsList
+- When user clicks "Sort by Edge": 
+  sort predictionsList by edge (highest first) using:
+  [...predictionsList].sort((a, b) => b.edge - a.edge)
+  then update state and re-render cards
+
+- When user clicks "Sort by Confidence":
+  sort predictionsList by confidence (highest first) using:
+  [...predictionsList].sort((a, b) => b.confidence - a.confidence)
+  then update state and re-render cards
+
+- When user clicks "Sort by Odds":
+  sort predictionsList by odds (highest first) using:
+  [...predictionsList].sort((a, b) => b.odds - a.odds)
+  then update state and re-render cards
+
+- The active sort button must have gold background color #f0b429 and black text
+- Inactive sort buttons have dark background and grey text
+- Sorting must happen instantly on click with no loading
+
+━━━━━━━━━━━━━━━━━━━━
+FIX 2: TODAY'S PICKS PAGE
+━━━━━━━━━━━━━━━━━━━━
+Today's picks page must work exactly like this:
+
+STEP 1: When page loads call GET /api/fixtures/today
+This route must query Supabase matches table:
+SELECT * FROM matches 
+WHERE ft_home IS NULL 
+AND date = CURRENT_DATE
+ORDER BY league ASC
+
+If that returns 0 results then also query for tomorrow:
+SELECT * FROM matches 
+WHERE ft_home IS NULL 
+AND date = CURRENT_DATE + 1
+ORDER BY league ASC
+
+STEP 2: For each fixture found immediately show a skeleton card 
+placeholder while prediction is being generated.
+
+STEP 3: For each fixture call POST /api/predict one at a time.
+Do not wait for all predictions to finish before showing anything.
+As soon as each prediction comes back replace its skeleton with the real card.
+
+STEP 4: Check Supabase picks table first before predicting:
+SELECT * FROM picks 
+WHERE user_input = 'home vs away' 
+AND created_at >= today 00:00:00
+If a prediction already exists for this match today use it instead of generating new one.
+
+STEP 5: After all predictions are done update the stats bar:
+- Total Picks: count of predictions
+- Sharp Picks: count where edge >= 10
+- Avg Edge: average of all edge values formatted as X.X%
+
+STEP 6: Auto refresh all predictions every 30 minutes in background.
+Show "Last updated: HH:MM" timestamp.
+
+━━━━━━━━━━━━━━━━━━━━
+FIX 3: PREDICTION ENGINE
+━━━━━━━━━━━━━━━━━━━━
+The POST /api/predict route must do exactly this:
+
+Receive body: { home, away, league, date, home_odds, draw_odds, away_odds }
+
+STEP 1: Query H2H from Supabase:
+SELECT * FROM matches 
+WHERE (
+  (LOWER(team1) LIKE LOWER('%' || $home || '%') AND LOWER(team2) LIKE LOWER('%' || $away || '%'))
+  OR
+  (LOWER(team1) LIKE LOWER('%' || $away || '%') AND LOWER(team2) LIKE LOWER('%' || $home || '%'))
+)
+AND ft_home IS NOT NULL
+ORDER BY date DESC 
+LIMIT 20
+
+STEP 2: Query home team recent form:
+SELECT * FROM matches 
+WHERE (LOWER(team1) LIKE LOWER('%' || $home || '%') OR LOWER(team2) LIKE LOWER('%' || $home || '%'))
+AND ft_home IS NOT NULL
+ORDER BY date DESC 
+LIMIT 10
+
+STEP 3: Query away team recent form:
+SELECT * FROM matches 
+WHERE (LOWER(team1) LIKE LOWER('%' || $away || '%') OR LOWER(team2) LIKE LOWER('%' || $away || '%'))
+AND ft_home IS NOT NULL
+ORDER BY date DESC 
+LIMIT 10
+
+STEP 4: Calculate these stats from H2H results:
+- homeWins: count matches where home team won
+- awayWins: count matches where away team won  
+- draws: count drawn matches
+- totalMatches: homeWins + awayWins + draws (minimum 1)
+- homeWinProb: homeWins / totalMatches
+- awayWinProb: awayWins / totalMatches
+- drawProb: draws / totalMatches
+- avgGoals: total goals in all H2H matches / totalMatches
+- homeGoalsForm: average goals scored by home team in last 5 matches
+- awayGoalsForm: average goals scored by away team in last 5 matches
+
+STEP 5: Pick market using this exact logic:
+let market;
+const rand = Math.random();
+if (homeWinProb > 0.55) {
+  const options = ['Home Win', 'Asian Handicap Home -0.5', '1UP Home Win', '2UP Home Win', 'Double Chance 1X'];
+  market = options[Math.floor(rand * options.length)];
+} else if (awayWinProb > 0.50) {
+  const options = ['Away Win', 'Asian Handicap Away +0.5', '1UP Away Win', '2UP Away Win', 'Double Chance X2'];
+  market = options[Math.floor(rand * options.length)];
+} else if (drawProb > 0.35) {
+  const options = ['Draw', 'Double Chance 1X', 'Double Chance X2', 'BTTS Yes'];
+  market = options[Math.floor(rand * options.length)];
+} else if (avgGoals > 2.8) {
+  market = rand > 0.5 ? 'Over 2.5 Goals' : 'BTTS Yes';
+} else if (avgGoals < 2.0) {
+  market = rand > 0.5 ? 'Under 2.5 Goals' : 'BTTS No';
+} else {
+  const allMarkets = ['Home Win', 'Away Win', 'Draw', 'Double Chance 1X', 'Double Chance X2', 
+    'Double Chance 12', 'Over 2.5 Goals', 'Under 2.5 Goals', 'Over 1.5 Goals', 
+    'BTTS Yes', 'BTTS No', 'Asian Handicap Home -0.5', 'Asian Handicap Away +0.5',
+    '1UP Home Win', '1UP Away Win', '2UP Home Win', '2UP Away Win'];
+  market = allMarkets[Math.floor(rand * allMarkets.length)];
+}
+
+STEP 6: Get odds for selected market:
+- Home Win / Asian Handicap Home / 1UP Home / 2UP Home / Double Chance 1X → use home_odds
+- Away Win / Asian Handicap Away / 1UP Away / 2UP Away / Double Chance X2 → use away_odds
+- Draw / Double Chance 12 → use draw_odds
+- Over 2.5 / BTTS Yes → use 1.85 if no odds available
+- Under 2.5 / BTTS No → use 1.75 if no odds available
+- Default to 1.80 if nothing else
+
+STEP 7: Calculate edge and Kelly:
+const impliedProb = 1 / odds;
+const ourProb = market includes 'Away' ? awayWinProb + 0.05 : 
+                market includes 'Draw' ? drawProb + 0.05 : 
+                homeWinProb + 0.05;
+const edge = ((ourProb - impliedProb) * 100).toFixed(1);
+const b = odds - 1;
+const q = 1 - ourProb;
+const kelly = Math.max(0, Math.min(5, ((b * ourProb - q) / b) * 100));
+const stake = kelly.toFixed(1);
+const confidence = Math.min(92, Math.max(45, Math.round(ourProb * 100 + 8)));
+
+STEP 8: Build prompt for Gemini with real data:
+const prompt = `You are AuraAI, a football prediction analyst.
+Analyse this match using the provided statistics.
+
+Match: ${home} vs ${away}
+League: ${league}
+Market: ${market}
+Odds: ${odds}
+
+H2H Statistics (last ${totalMatches} meetings):
+- ${home} wins: ${homeWins} (${(homeWinProb*100).toFixed(0)}%)
+- ${away} wins: ${awayWins} (${(awayWinProb*100).toFixed(0)}%)
+- Draws: ${draws} (${(drawProb*100).toFixed(0)}%)
+- Average goals per game: ${avgGoals.toFixed(1)}
+
+${home} recent form (last 5): ${homeFormSummary}
+${away} recent form (last 5): ${awayFormSummary}
+
+Write exactly 3 bullet points explaining why ${market} is the right pick.
+Each bullet point must be one line only.
+Use the actual statistics above — do not make up data.
+Do not use markdown. Just plain bullet points starting with •`;
+
+STEP 9: Call Gemini with this prompt:
+Try key 1: AIzaSyByeN1kq_Fd0IEghKwOD280_ktX6oi-_0Q
+If fails try key 2: AIzaSyCjK0tOh2UOJu8FJrrAaATPlaf7tIR5VHw
+If both fail use Groq: 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
+
+STEP 10: Save to Supabase picks table:
+INSERT INTO picks (user_id, user_input, analysis, created_at)
+VALUES ('web_user', '${home} vs ${away}', fullAnalysisText, NOW())
+
+STEP 11: Return this exact JSON:
+{
+  "home": home,
+  "away": away,
+  "league": league,
+  "market": market,
+  "odds": odds,
+  "confidence": confidence,
+  "edge": parseFloat(edge),
+  "stake": parseFloat(stake),
+  "bullets": [bullet1, bullet2, bullet3],
+  "h2hMatches": totalMatches,
+  "homeWinProb": homeWinProb,
+  "awayWinProb": awayWinProb,
+  "drawProb": drawProb,
+  "avgGoals": avgGoals
+}
+
+━━━━━━━━━━━━━━━━━━━━
+FIX 4: BETS TO AVOID PAGE
+━━━━━━━━━━━━━━━━━━━━
+Create a new page at /avoid called "Bets To Avoid".
+Add it to the navigation menu with a warning icon.
+
+On page load:
+1. Fetch today's and tomorrow's fixtures from matches table
+2. For each fixture calculate danger score:
+
+let danger = 0;
+const reasons = [];
+
+Query H2H count from matches table.
+if (h2hCount < 3) { danger += 25; reasons.push("Less than 3 H2H meetings — prediction unreliable"); }
+if (Math.abs(homeWinProb - awayWinProb) < 0.10) { danger += 20; reasons.push("Coin flip match — no clear statistical edge"); }
+if (drawProb > 0.40) { danger += 15; reasons.push(`High draw probability (${(drawProb*100).toFixed(0)}%) — volatile outcome`); }
+if (isKnownDerby(home, away)) { danger += 20; reasons.push("Derby match — form becomes unpredictable"); }
+if (home_odds && draw_odds && away_odds && (Math.max(home_odds,draw_odds,away_odds) - Math.min(home_odds,draw_odds,away_odds)) < 0.5) { 
+  danger += 20; reasons.push("Bookmaker odds too tight — no value edge available"); 
+}
+
+Known derby pairs to check:
+[arsenal+tottenham], [chelsea+arsenal], [liverpool+everton], 
+[manchester united+manchester city], [real madrid+atletico], 
+[barcelona+real madrid], [ac milan+inter], [juventus+torino],
+[boca+river], [celtic+rangers], [galatasaray+fenerbahce]
+
+3. Show only fixtures where danger >= 40
+4. Sort by danger score highest first
+5. Show maximum 8 fixtures
+
+Each card shows:
+- Red danger bar showing danger score out of 100
+- Match name and league  
+- Each reason as a bullet point
+- "⚠️ No edge found — skip this bet" at bottom
+
+━━━━━━━━━━━━━━━━━━━━
+FIX 5: TEAM LOGOS
+━━━━━━━━━━━━━━━━━━━━
+Create a TeamLogo component that does exactly this:
+
+function TeamLogo({ teamName, size = 32 }) {
+  const [src, setSrc] = useState(getPrimaryLogoUrl(teamName));
+  const [fallbackIndex, setFallbackIndex] = useState(0);
+  
+  const fallbacks = [
+    getPrimaryLogoUrl(teamName),
+    getPrimaryLogoUrl(normalizeTeamName(teamName)),
+    getPrimaryLogoUrl(getShortName(teamName)),
+    null // triggers initials avatar
+  ];
+  
+  function handleError() {
+    const next = fallbackIndex + 1;
+    if (next < fallbacks.length - 1) {
+      setFallbackIndex(next);
+      setSrc(fallbacks[next]);
+    } else {
+      setSrc(null); // show initials
+    }
+  }
+  
+  if (!src) return <InitialsAvatar name={teamName} size={size} />;
+  return <img src={src} onError={handleError} width={size} height={size} />;
+}
+
+function getPrimaryLogoUrl(name) {
+  const normalized = name.toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9\-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/-(fc|cf|sc|ac|afc|utd|united|city|town|rovers|wanderers|athletic|albion|hotspur|county)$/g, '')
+    .trim('-');
+  return `https://ttxvmugwypsubqsoipgw.supabase.co/storage/v1/object/public/logos/logos/${normalized}.png`;
+}
+
+function getShortName(name) {
+  return name.split(' ')[0]; // just first word
+}
+
+function InitialsAvatar({ name, size }) {
+  const initials = name.split(' ').slice(0,2).map(w => w[0]).join('').toUpperCase();
+  const colors = ['#e63946','#2a9d8f','#e9c46a','#f4a261','#264653','#6a4c93','#1982c4'];
+  const color = colors[name.charCodeAt(0) % colors.length];
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: '50%',
+      background: color, display: 'flex', alignItems: 'center',
+      justifyContent: 'center', fontSize: size * 0.35,
+      fontWeight: 'bold', color: 'white'
+    }}>
+      {initials}
+    </div>
+  );
+}
+
+━━━━━━━━━━━━━━━━━━━━
+FIX 6: ADD TO ACCUMULATOR BUTTON
+━━━━━━━━━━━━━━━━━━━━
+When user clicks the Add button on any match card:
+1. Add the match to accumulator state (use React Context or localStorage)
+2. Show a toast notification: "Added to Accumulator ✓"
+3. Immediately navigate to /accumulator page
+4. The accumulator page must show the newly added match
+5. The Add button must change to "Added ✓" with green color after clicking
+6. If match is already in accumulator show "Added ✓" button — clicking again removes it
+
+Accumulator state must persist in localStorage:
+localStorage.setItem('accumulator', JSON.stringify(legs))
+On app load read from localStorage:
+const saved = localStorage.getItem('accumulator');
+if (saved) setLegs(JSON.parse(saved));
+
+━━━━━━━━━━━━━━━━━━━━
+FIX 7: ACCUMULATOR PAGE
+━━━━━━━━━━━━━━━━━━━━
+The /accumulator page must show:
+
+1. List of added matches. Each leg shows:
+   - Team logos
+   - Home vs Away
+   - League
+   - If predicted: show pick and odds
+   - Remove button (X) — removes from list instantly
+
+2. Analyse button:
+   - Calls POST /api/accumulator with all legs
+   - Shows loading spinner while waiting
+   - Displays returned analysis below
+
+3. Share button:
+   - Copies this text to clipboard:
+     🎯 AURA ACCUMULATOR
+     ━━━━━━━━━━━━━━━━━━━━
+     [for each leg: ⚽ Home vs Away — Pick @ Odds]
+     ━━━━━━━━━━━━━━━━━━━━
+     Combined Odds: X.XX
+   - Shows toast: "Copied to clipboard ✓"
+
+5. Clear all button — removes all legs with confirmation
+
+━━━━━━━━━━━━━━━━━━━━
+FIX 8: NAVIGATION
+━━━━━━━━━━━━━━━━━━━━
+Navigation must have these 5 items:
+- Today's Picks (home icon) → /
+- Fixtures (calendar icon) → /fixtures
+- Accumulator (layers icon) → /accumulator — show badge with count of legs
+- Avoid (warning icon) → /avoid
+- Stats (chart icon) → /stats
+
+AuraOdds logo at top left → always navigates to /
+Active page item highlighted in gold #f0b429
+On mobile show bottom navigation bar with icons and labels
+On desktop show top navigation bar
+
+━━━━━━━━━━━━━━━━━━━━
+FIX 9: FIXTURES CALENDAR
+━━━━━━━━━━━━━━━━━━━━
+The fixtures calendar must show ALL upcoming fixtures not just 7 days.
+
+On load:
+1. Check localStorage for cached fixtures:
+   const cached = localStorage.getItem('fixtures_cache');
+   const cacheTime = localStorage.getItem('fixtures_cache_time');
+   if (cached && Date.now() - cacheTime < 3600000) use cached data
+
+2. If no cache or cache expired call GET /api/fixtures
+
+3. GET /api/fixtures must:
+   a. Query Supabase matches table:
+      SELECT id, team1, team2, league, date, round FROM matches 
+      WHERE ft_home IS NULL 
+      AND date >= CURRENT_DATE
+      ORDER BY date ASC
+      LIMIT 1000
+   
+   b. Also fetch from Football-Data.org:
+      For each competition ID: 2021, 2014, 2002, 2019, 2015, 2001, 2018, 2017, 2003, 2013
+c. Also fetch from odds https://the-odds-api.com for match odds
+      GET https://api.football-data.org/v4/competitions/{id}/matches?status=SCHEDULED
+      Header: X-Auth-Token: 044df779995148f59d6ee9b4fd54b37c
+      Extract: homeTeam.name, awayTeam.name, competition.name, utcDate
+   
+   c. Merge both sources — remove duplicates based on team names and date
+   
+   d. For each match try to find odds from Odds API:
+      Fetch all upcoming odds once per sport key, cache them in memory
+      Match fixtures to odds by team name fuzzy matching
+   
+   e. Group all fixtures by date
+   
+   f. Save to localStorage:
+      localStorage.setItem('fixtures_cache', JSON.stringify(byDate))
+      localStorage.setItem('fixtures_cache_time', Date.now())
+   
+   g. Return: { by_date: { "2026-03-17": [...], "2026-03-18": [...] } }
+
+4. Calendar strip shows ALL dates that have fixtures
+   Scroll horizontally — show as many dates as needed
+   Each date chip shows: day name, date number, match count badge
+   Tapping a date filters the match list below
+
+5. League filter shows ALL leagues found in loaded fixtures
+
+━━━━━━━━━━━━━━━━━━━━
+FIX 10: STATISTICS PAGE
+━━━━━━━━━━━━━━━━━━━━
+Read all predictions from Supabase picks table.
+Parse each analysis field to extract: edge, confidence, market, league.
+Also allow user to manually mark each prediction as Won or Lost.
+Store win/loss results in localStorage: 
+{ "home_vs_away_date": "won" or "lost" }
+
+Show these stats:
+- Win Rate %: (won / total marked) * 100
+- Total predictions made
+- Total marked as won
+- Total marked as lost  
+- Best streak: longest consecutive wins
+- Average edge on winning picks vs losing picks
+
+Charts using recharts library:
+- Line chart: cumulative profit over time (x=date, y=running profit)
+- Bar chart: win rate grouped by league
+- Bar chart: win rate grouped by market type
+- Calendar heatmap: each day colored by result

@@ -1,0 +1,176 @@
+Build a complete working football prediction website called AuraOdds.
+
+TECH STACK:
+- Node.js + Express backend
+- React + Vite frontend
+- Both run together — Express serves React build and handles API routes
+- Deploy ready for Vercel
+
+SUPABASE:
+URL: https://ttxvmugwypsubqsoipgw.supabase.co
+Anon Key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0eHZtdWd3eXBzdWJxc29pcGd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM2NDc0NDAsImV4cCI6MjA4OTIyMzQ0MH0.cs3w_DUJoquGsCtw46SIgMihaskChYanAHckotd3zYs
+
+EXISTING TABLES IN SUPABASE:
+1. matches — id, league, season, date, team1, team2, ft_home, ft_away, ht_home, ht_away, round
+   92,900 rows total. Past matches have scores. Future fixtures have ft_home and ft_away as null.
+2. picks — id, user_id, user_input, analysis, created_at
+3. fixtures_cache — id, cache_key, matches, updated_at
+
+TEAM LOGOS:
+https://ttxvmugwypsubqsoipgw.supabase.co/storage/v1/object/public/logos/logos/[team-name].png
+Normalize: lowercase, spaces to hyphens, remove special chars, remove FC/United suffixes.
+Example: "Manchester United FC" → "manchester-united-fc.png"
+Show default football icon if logo not found.
+
+API KEYS:
+Odds API: 64e71893965e747368209ff71adc7541 for pulling odds and
+Football-Data.org: for match for fixtures. dont duplicate fixtures. 044df779995148f59d6ee9b4fd54b37c
+  Header: X-Auth-Token: 044df779995148f59d6ee9b4fd54b37c
+  Base URL: https://api.football-data.org/v4
+Gemini PRIMARY AI key 1: AIzaSyByeN1kq_Fd0IEghKwOD280_ktX6oi-_0Q
+Gemini PRIMARY AI key 2: AIzaSyCjK0tOh2UOJu8FJrrAaATPlaf7tIR5VHw
+  Endpoint: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=KEY
+  Body: {"contents":[{"parts":[{"text":"prompt"}]}],"generationConfig":{"maxOutputTokens":400,"temperature":0.6}}
+  Parse: response.candidates[0].content.parts[0].text
+Groq FALLBACK key: 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
+  Endpoint: POST https://api.groq.com/openai/v1/chat/completions
+  Header: Authorization: Bearer KEY
+  Body: {"model":"llama-3.3-70b-versatile","messages":[{"role":"user","content":"prompt"}],"max_tokens":400}
+  Parse: response.choices[0].message.content
+
+HOW PREDICTIONS WORK:
+When page loads automatically predict ALL today's fixtures.
+For each match:
+1. Query matches table for H2H history between the two teams (last 20 meetings)
+2. Query recent form for home team (last 10 matches)
+3. Query recent form for away team (last 10 matches)
+4. Calculate: home win %, away win %, draw %, average goals per game from H2H
+5. Fetch live odds from Odds API
+6. Pick best market based on stats:
+   - home win prob > 55% → Home Win, Asian Handicap Home, 1UP Home, 2UP Home
+   - away win prob > 50% → Away Win, Asian Handicap Away, 1UP Away, 2UP Away
+   - draw prob > 35% → Draw, Double Chance 1X, Double Chance X2
+   - avg goals > 2.8 → Over 2.5 Goals or BTTS Yes
+   - avg goals < 2.0 → Under 2.5 Goals or BTTS No
+7. Calculate Kelly Criterion: f = (b*p - q) / b, cap at 5%
+8. Call Gemini AI to generate short sharp prediction (3 bullet points max)
+9. Save prediction to picks table
+10. Show on screen immediately
+Predictions auto-refresh every 30 minutes.
+Never show Kelly formula — just show the stake % result.
+
+BET MARKETS TO ROTATE:
+Home Win, Away Win, Draw, Double Chance 1X, Double Chance X2, Double Chance 12,
+Over 2.5 Goals, Under 2.5 Goals, Over 1.5 Goals, BTTS Yes, BTTS No,
+Asian Handicap Home -0.5, Asian Handicap Home -1.5,
+Asian Handicap Away +0.5, Asian Handicap Away +1.5,
+1UP Home, 1UP Away, 2UP Home, 2UP Away
+
+EXPRESS BACKEND ROUTES:
+
+GET /api/fixtures
+- Query matches table for fixtures where ft_home IS NULL and date between today and today+7
+- Also call Football-Data.org competitions 2021, 2014, 2002, 2019, 2015, 2001
+- Fetch odds from Odds API
+- Return: { by_date: { "2026-03-17": [ { id, home, away, league, time, home_odds, draw_odds, away_odds } ] } }
+- Cache in fixtures_cache table
+
+GET /api/fixtures/today
+- Same but only today's matches
+
+POST /api/predict
+- Body: { home, away, league, date, home_odds, draw_odds, away_odds }
+- Fetch H2H and form from matches table
+- Pick market, calculate edge and Kelly stake
+- Call Gemini then Groq fallback
+- Save to picks table
+- Return: { pick, market, odds, confidence, edge, stake, analysis }
+
+POST /api/accumulator
+- Body: { matches: [{home, away, league, home_odds, draw_odds, away_odds}] }
+- Predict each match
+- Return: { analysis, combined_odds, picks: [{match, pick, odds, confidence}] }
+
+GET /api/picks/today
+GET /api/picks/all
+
+FRONTEND — 4 PAGES:
+
+PAGE 1 — Today's Picks (home page /):
+- On load automatically fetch and predict all today's fixtures
+- Show loading skeleton while predicting
+- Stats bar: total picks today, sharp value picks (edge 10%+), average edge %
+- Each match card shows:
+  - Team logos side by side
+  - Home vs Away team names
+  - League and kickoff time
+  - Pick market (e.g. "Home Win", "Over 2.5 Goals")
+  - Odds
+  - Confidence % with visual progress bar
+  - Edge %
+  - Recommended stake %
+- Filter by league
+- Sort by edge, confidence, or odds
+- Cards auto refresh every 30 minutes
+
+PAGE 2 — Fixtures Calendar (/fixtures):
+- 7-day calendar strip at top
+- Match count badge on each day
+- Each match card: team logos, teams, league, time, home/draw/away odds
+- Search bar
+- League filter
+- Click any match to get prediction instantly
+
+PAGE 3 — Accumulator Builder (/accumulator):
+- Add matches from fixtures page
+- Shows list of legs with remove button
+- Payout calculator: enter stake, see potential winnings in real time
+- Analyse button generates full AI analysis
+- Combined odds shown
+- Share button copies picks as formatted text
+
+PAGE 4 — Statistics (/stats):
+- Read from picks table
+- Win rate circular gauge
+- Total predictions, wins, losses, ROI %
+- Profit/Loss line chart over time
+- League breakdown bar chart
+- Market breakdown (which markets win most)
+- Monthly calendar: green = winning day, red = losing day
+- Best streak, Sharpe ratio
+
+DESIGN — MINIMALIST:
+- Clean dark background #0a0a0a
+- White text #ffffff
+- Single gold accent #f0b429 for highlights only
+- Cards with subtle borders, no heavy shadows
+- Clean sans-serif font (Inter)
+- Lots of whitespace
+- Simple icons from lucide-react
+- Mobile first responsive
+- Smooth transitions
+- Loading skeletons
+- Empty states with simple messages
+- Bet responsibly disclaimer in footer
+
+DEPLOYMENT FILES TO INCLUDE:
+vercel.json:
+{
+  "version": 2,
+  "builds": [
+    { "src": "api/index.js", "use": "@vercel/node" },
+    { "src": "package.json", "use": "@vercel/static-build", "config": { "distDir": "dist" } }
+  ],
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/index.js" },
+    { "src": "/(.*)", "dest": "/dist/$1" }
+  ]
+}
+
+Make sure:
+- npm run build builds the React frontend
+- npm run dev runs both Express and Vite together
+- All API routes work
+- Supabase queries work
+- AI predictions work with Gemini primary and Groq fallback
+- Website fully works end to end
