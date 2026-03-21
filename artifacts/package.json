@@ -2,7 +2,6 @@
   "name": "auraodds",
   "version": "0.0.0",
   "private": true,
-  "type": "module",
   "scripts": {
     "build": "vite build --config vite.config.ts",
     "start": "node api/index.js"
