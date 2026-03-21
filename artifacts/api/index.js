@@ -1,14 +1,12 @@
 process.on(‘uncaughtException’, (err) => { console.error(‘Uncaught Exception:’, err); });
 process.on(‘unhandledRejection’, (err) => { console.error(‘Unhandled Rejection:’, err); });
 
-import express from ‘express’;
-import cors from ‘cors’;
-import { createClient } from ‘@supabase/supabase-js’;
-import path from ‘path’;
-import { fileURLToPath } from ‘url’;
-import fs from ‘fs’;
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const express = require(‘express’);
+const cors = require(‘cors’);
+const { createClient } = require(’@supabase/supabase-js’);
+const path = require(‘path’);
+const fs = require(‘fs’);
+const __dirname = __dirname;
 const app = express();
 const PORT = process.env.PORT || process.env.API_PORT || 3001;
 
