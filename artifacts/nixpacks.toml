@@ -1,0 +1,5 @@
+[start]
+cmd = "node api/index.js"
+
+[build]
+cmd = "npm install && npm run build"
